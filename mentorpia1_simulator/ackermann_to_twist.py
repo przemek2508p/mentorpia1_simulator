@@ -12,7 +12,7 @@ class AckermannToTwistNode(Node):
         super().__init__("ackermann_to_twist")
 
         # Could parameterize wheelbase if you want a better Ackermann approximation
-        self.declare_parameter('wheelbase', 1.0)
+        self.declare_parameter('wheelbase', 0.14)
         self.wheelbase = self.get_parameter('wheelbase').value
 
         # Subscribe to AckermannDrive commands (e.g. on "/cmd_ackermann")

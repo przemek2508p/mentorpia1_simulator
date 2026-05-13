@@ -2,95 +2,115 @@ import os
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration, TextSubstitution
+from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     pkg_mentorpia1 = get_package_share_directory('mentorpia1_simulator')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
-    mesh_path = os.path.join(pkg_mentorpia1, 'meshes')
-    current_paths = os.environ.get('GAZEBO_MODEL_PATH', '')
-    os.environ['GAZEBO_MODEL_PATH'] = mesh_path + ':' + current_paths
+    # Xacro -> URDF
+    xacro_file = os.path.join(pkg_mentorpia1, 'urdf', 'mentorpi.xacro')
+    robot_description_config = xacro.process_file(xacro_file)
+    robot_description = {'robot_description': robot_description_config.toxml()}
+
+    # Set Gazebo resource path to find meshes
+    # In Gazebo Sim (Ignition), we use GZ_SIM_RESOURCE_PATH
+    gz_resource_path = SetEnvironmentVariable(
+        name='GZ_SIM_RESOURCE_PATH',
+        value=[os.path.join(pkg_mentorpia1, '..')]
+    )
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
-
-    # Xacro -> URDF
-    robot_description_path = os.path.join(pkg_mentorpia1, 'urdf', 'mentorpi.xacro')
-    robot_description_config = xacro.process_file(robot_description_path)
-    robot_description = {'robot_description': robot_description_config.toxml()}
 
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='both',
-        parameters=[robot_description],
+        parameters=[robot_description, {'use_sim_time': use_sim_time}],
     )
 
-    # World
-    world = LaunchConfiguration("world")
-    world_path = os.path.join(pkg_mentorpia1, 'worlds', 'empty_world.sdf')
-    declare_world_cmd = DeclareLaunchArgument(
-        "world",
-        default_value=world_path,
-        description="Path to the world file."
+    # Gazebo Sim (headless by default if you don't run Gazebo GUI, but here we specify -s for server only)
+    # Actually, we let the user decide. But since you asked for no GUI, I'll add an argument.
+    headless = LaunchConfiguration('headless')
+    declare_headless_cmd = DeclareLaunchArgument(
+        'headless',
+        default_value='True',
+        description='Whether to run Gazebo GUI'
     )
-    world_str_path = [TextSubstitution(text='-r '), world]
 
-    # Gazebo
+    # We use gz_sim.launch.py which is the recommended way
+    # If headless is True, we pass -s
+    gz_args = LaunchConfiguration('gz_args')
+    declare_gz_args_cmd = DeclareLaunchArgument(
+        'gz_args',
+        default_value='-r empty.sdf',
+        description='Gazebo arguments'
+    )
+
+    # We'll construct gz_args based on headless
+    from launch.substitutions import PythonExpression
+    gz_args_value = PythonExpression([
+        "'-r empty.sdf' + (' -s' if '", headless, "' == 'True' else '')"
+    ])
+    
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
         ),
-        launch_arguments={'gz_args': world_str_path}.items(),
+        launch_arguments={'gz_args': gz_args_value}.items(),
     )
 
-    # Spawn SDF
-    mentorpi_sdf_path = os.path.join(pkg_mentorpia1, 'urdf', 'mentorpia1.sdf')
+    # Spawn Robot
     spawn = Node(
         package='ros_gz_sim',
         executable='create',
         arguments=[
             '-name', 'mentorpia1',
-            '-file', mentorpi_sdf_path,
+            '-string', robot_description_config.toxml(),
             '-z', '0.1',
-            '-x', '0.0',
         ],
         output='screen'
     )
 
-    # Bridge /clock and /cmd_vel => geometry_msgs/Twist <-> gz.msgs.Twist
-    clock_and_cmd_vel_bridge = Node(
+    # Bridge
+    bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        parameters=[{'use_sim_time': use_sim_time}],
         arguments=[
-            '/clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock',
-            '/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
+            '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+            '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+            '/lidar@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+            '/camera@sensor_msgs/msg/Image[gz.msgs.Image',
+            '/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+            '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
+            '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+            '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+            '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
         ],
         output='screen'
     )
 
-    # Node that converts AckermannDrive -> Twist, so you can publish Ackermann on /cmd_ackermann
+    # Ackermann Converter
     ackermann_to_twist = Node(
         package='mentorpia1_simulator',
-        executable='ackermann_to_twist',  # if you set it up as a console script
-        # or use a direct path if not installed as console script
+        executable='ackermann_to_twist',
         name='ackermann_to_twist',
         output='screen',
-        # optional param if you want to set wheelbase
-        parameters=[{'wheelbase': 1.0}],
+        parameters=[{'wheelbase': 0.14}],
     )
 
     return LaunchDescription([
+        gz_resource_path,
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        declare_world_cmd,
+        declare_headless_cmd,
+        declare_gz_args_cmd,
         gazebo,
         spawn,
-        clock_and_cmd_vel_bridge,
         robot_state_publisher,
+        bridge,
         ackermann_to_twist,
     ])

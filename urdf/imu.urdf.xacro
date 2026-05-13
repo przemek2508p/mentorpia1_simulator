@@ -1,23 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <robot name="imu" xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:property name="M_PI" value="3.1415926535897931"/>
-  <link
-    name="imu_link">
+  <link name="imu_link">
+    <inertial>
+      <mass value="0.001"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
   </link>
-  <joint
-    name="imu_joint"
-    type="fixed">
-    <origin
-      xyz="0 0 ${0.025 - 0.0295 + 0.0965/2 + 0.0678410821576746}"
-      rpy="0 0 ${-M_PI/2}" />
-    <parent
-      link="base_link" />
-    <child
-      link="imu_link" />
-    <axis
-      xyz="0 0 0" />
+  <joint name="imu_joint" type="fixed">
+    <origin xyz="0 0 0.11" rpy="0 0 ${-M_PI/2}" />
+    <parent link="base_link" />
+    <child link="imu_link" />
   </joint>
+
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>1</always_on>
+      <update_rate>50</update_rate>
+      <visualize>false</visualize>
+      <topic>imu</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+    </sensor>
+  </gazebo>
 </robot>
+
 
 
 
